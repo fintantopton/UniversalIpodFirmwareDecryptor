@@ -20,6 +20,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-This license applies to the original project source. Third-party tools,
-embedded historical device payloads, firmware images, and external runtime
-components retain their own licenses and notices; see THIRD_PARTY_NOTICES.md.
