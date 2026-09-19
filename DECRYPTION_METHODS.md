@@ -18,7 +18,7 @@ This is the operational guide for the active v3.2 application.
 | Classic 6G/6.5G/7G revisions | 24, 33, 35, 38 | S5L8702 | Native Windows wInd3x hardware AES | Apple DFU, PID `0x1223`/`0x1250` | Supported path |
 | Nano 3G | 26, 27 | S5L8702 | Native Windows wInd3x hardware AES | Apple DFU, PID `0x1223` | Supported path |
 | Nano 4G | 31 | S5L8720 | `epNano4G` wInd3x trampoline + hardware AES | Apple DFU, PID `0x1225` | Integrated; physical validation should be recorded per device |
-| Nano 5G | 34 | S5L8730 | `epNano5G` wInd3x trampoline + hardware AES | Apple DFU, PID `0x1231` | Integrated; static/output validation complete |
+| Nano 5G | 34 | S5L8730 | `epNano5G` wInd3x trampoline + hardware AES | Apple DFU, PID `0x1231` | Successfully decrypted and locally verified (OSOS 1.0.1 and 1.0.2) |
 | Nano 6G | 36 | S5L8723 | S5Late research path | Apple DFU, PID `0x1232` | Not current decrypt support |
 | Nano 7G | 37 | S5L8740 | S5Late research path | Apple DFU, PID `0x1234` | Not current decrypt support |
 | Legacy Notes/iBugger target | 19, 29 | S5L87xx | Notes → Loader → Core → device AES | Disk-mode staging; Unified iBugger `FFFF:8642` | Separate hardware path |
@@ -128,3 +128,21 @@ nano2g_dfu_probe.py               DFU diagnostic probe
 _patch_all_native.py               Native wInd3x patch helper
 ipod_dfu_winusb.inf                WinUSB driver INF
 ```
+
+## Verified Nano 5G OSOS outputs
+
+The Nano 5G hardware-AES process has successfully produced coherent decrypted OSOS firmware for two firmware versions:
+
+```text
+OSOS 1.0.1
+size:   7,276,688 bytes
+SHA256: EA4BAD8DC8C8C57EA3144F9615B92D6865AB34BEC267229B41E7B12CF6B491F4
+
+OSOS 1.0.2
+size:   7,286,720 bytes
+SHA256: 3269D9EDA2E7E7C406D7BFD6895BD83F27603F03A2C9F52C6CF415924E41AF81
+```
+
+Both outputs validate as S5L8730 IMG1 images with magic `8730`, version `2.0`, format 4, internally consistent length fields, 16-byte-aligned bodies, valid unsigned-image signature/certificate placeholders, and expected RetailOS anchors including `RTXC`, `MeCCA`, `SQLite`, `DiskMode`, `TCCamera`, and `N33FirmwareWin`.
+
+The current output-validation code still uses a basic file-size gate, so future runs should apply the structural/content checks above rather than treating file creation alone as proof.
