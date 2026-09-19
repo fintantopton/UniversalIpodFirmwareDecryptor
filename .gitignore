@@ -1,0 +1,23 @@
+# Generated Python files
+__pycache__/
+*.py[cod]
+
+# Generated application/build output
+build/
+dist/
+*.spec.bak
+
+# Firmware samples and extracted data
+*.ipsw
+Firmware.MSE
+mse_out/
+*_decrypted.bin
+*.recovery.dat
+*.progress.json
+decrypt_log.txt
+
+# Local/third-party binaries and machine-specific dependencies
+zadig.exe
+wInd3x-win.exe
+wInd3x-win-fixed.exe
+libusb-1.0.dll
