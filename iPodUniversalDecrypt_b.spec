@@ -5,11 +5,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('../AppPatcher/wInd3x-src/wInd3x', '.'),
-        ('../AppPatcher/wInd3x-src/wInd3x-write-musl', '.'),
-        ('../AppPatcher/wInd3x-src/wInd3x-win.exe', '.'),
-        ('../AppPatcher/wInd3x-src/libusb-1.0.dll', '.'),
-        ('zadig.exe', '.'),
+        ('vendor/wInd3x', '.'),
+        ('vendor/wInd3x-write-musl', '.'),
+        ('vendor/wInd3x-win.exe', '.'),
+        ('vendor/libusb-1.0.dll', '.'),
+        ('vendor/zadig.exe', '.'),
         ('icon.ico', '.'),
     ],
     # Nano 2G device-based decrypt (nano2g_device_decrypt.py, nano2g_payloads.py)

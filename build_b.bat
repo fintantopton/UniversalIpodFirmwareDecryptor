@@ -1,55 +1,41 @@
 @echo off
-REM ============================================================
-REM Universal iPod Firmware Decryptor v2.1.0 - Build Script
-REM Standalone build - bundles wInd3x binary
-REM ============================================================
+setlocal
 
-echo.
 echo ========================================
-echo  Building iPodUniversalDecrypt_b.exe
-echo  (Standalone - bundled wInd3x)
+echo Universal iPod Firmware Decryptor build
 echo ========================================
-echo.
 
-REM Check for Python
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Python not found in PATH!
-    echo Install Python from python.org
-    pause
+    echo ERROR: Python was not found in PATH.
     exit /b 1
 )
 
-REM Check for PyInstaller
 python -m PyInstaller --version >nul 2>&1
 if errorlevel 1 (
-    echo Installing PyInstaller...
-    pip install pyinstaller
-)
-
-REM Verify wInd3x binary exists
-if not exist "..\AppPatcher\wInd3x-src\wInd3x" (
-    echo ERROR: wInd3x binary not found at ..\AppPatcher\wInd3x-src\wInd3x
-    echo Make sure the Linux wInd3x binary is in that location.
-    pause
+    echo ERROR: PyInstaller is not installed.
+    echo Install it with: python -m pip install pyinstaller
     exit /b 1
 )
 
-REM Build the EXE using spec file
-echo Building EXE with bundled wInd3x...
-python -m PyInstaller --clean iPodUniversalDecrypt_b.spec
+if not exist "vendor\wInd3x-win.exe" (
+    echo ERROR: vendor\wInd3x-win.exe is missing.
+    echo See BUILD.md for external dependency setup.
+    exit /b 1
+)
+if not exist "vendor\libusb-1.0.dll" (
+    echo ERROR: vendor\libusb-1.0.dll is missing.
+    echo See BUILD.md for external dependency setup.
+    exit /b 1
+)
 
+python -m PyInstaller --clean --noconfirm iPodUniversalDecrypt_b.spec
 if errorlevel 1 (
-    echo.
-    echo ERROR: Build failed!
-    pause
+    echo ERROR: PyInstaller build failed.
     exit /b 1
 )
 
 echo.
-echo ========================================
-echo  Build complete!
-echo  EXE: dist\iPodUniversalDecrypt_b.exe
-echo ========================================
-echo.
-pause
+echo Build complete:
+echo dist\iPodUniversalDecrypt_v3.2.0_b30.exe
+endlocal

@@ -21,3 +21,13 @@ zadig.exe
 wInd3x-win.exe
 wInd3x-win-fixed.exe
 libusb-1.0.dll
+
+# External build dependencies
+vendor/*.exe
+vendor/*.dll
+vendor/wInd3x
+vendor/wInd3x-write-musl
+
+# Local-only handover material
+NANO5G_IMPLEMENTATION_HANDOVER.md
+NANO5G_STRINGS_FONTS_FINDINGS.md

@@ -14,7 +14,7 @@ Native Windows application for extracting and decrypting iPod RetailOS (OSOS) fi
 - **Nano 5G resource export:** Plaintext RSRC/FAT16 parsing with `SilverImagesDB.LE.bin` export in `nano5g_resources.py`.
 - **Historical software reconstruction:** Retained only for forensic comparison; it is not a valid source of ground-truth decrypted firmware.
 
-The current detailed method matrix is documented in the repository's `KNOWLEDGE_BASE.md` and Nano 5G handover documents.
+The current detailed method matrix is documented in `DECRYPTION_METHODS.md`, with build instructions in `BUILD.md` and operational notes in `KNOWLEDGE_BASE.md`.
 
 ## Source layout
 
@@ -22,10 +22,10 @@ The current detailed method matrix is documented in the repository's `KNOWLEDGE_
 ipod_universal_decrypt_b.py       Active Tkinter application
 nano2g_device_decrypt.py          Native WinUSB legacy device transport
 nano2g_payloads.py                Embedded RAM-resident device payloads
-nano5g_resources.py                Nano 5G RSRC/FAT16 extraction
-NANO5G_IMPLEMENTATION_HANDOVER.md Nano 5G implementation notes
-NANO5G_STRINGS_FONTS_FINDINGS.md  Nano 5G resource findings
-KNOWLEDGE_BASE.md                 Application knowledge base
+nano5g_resources.py               Nano 5G RSRC/FAT16 extraction
+DECRYPTION_METHODS.md              Per-model decryption methods
+BUILD.md                           Complete source/build instructions
+KNOWLEDGE_BASE.md                  Application knowledge base
 ```
 
 ## Runtime dependencies
@@ -41,7 +41,7 @@ The source application can use PyCryptodome, `cryptography`, or OpenSSL for opti
 
 ## Build
 
-The included PyInstaller specification is designed for the existing Windows development layout and expects the wInd3x/libusb dependencies described in the build files. A release build can be produced with:
+The included `BUILD.md` and `iPodUniversalDecrypt_b.spec` use the local `vendor/` directory for external dependencies. A release build can be produced with:
 
 ```powershell
 python -m PyInstaller --clean --noconfirm iPodUniversalDecrypt_b.spec
