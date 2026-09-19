@@ -1,17 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
+_vendor_files = [
+    'wInd3x',
+    'wInd3x-write-musl',
+    'wInd3x-win.exe',
+    'libusb-1.0.dll',
+    'zadig.exe',
+]
+_datas = [(os.path.join('vendor', name), '.')
+          for name in _vendor_files
+          if os.path.isfile(os.path.join('vendor', name))]
+_datas.append(('icon.ico', '.'))
+
 a = Analysis(
     ['ipod_universal_decrypt_b.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('vendor/wInd3x', '.'),
-        ('vendor/wInd3x-write-musl', '.'),
-        ('vendor/wInd3x-win.exe', '.'),
-        ('vendor/libusb-1.0.dll', '.'),
-        ('vendor/zadig.exe', '.'),
-        ('icon.ico', '.'),
-    ],
+    datas=_datas,
     # Nano 2G device-based decrypt (nano2g_device_decrypt.py, nano2g_payloads.py)
     # is a local import next to the entry script, so PyInstaller's Analysis
     # bundles it automatically. It needs no external DLL — only
