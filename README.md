@@ -58,3 +58,11 @@ The device-side exploit/decryption paths are intended to be RAM-resident. They d
 - Nano 4G/5G trampoline paths require direct native Windows USB; USB/IP bridges are unreliable for the intentional timeout/re-enumeration sequence.
 - S5Late-era models are not current decrypt-supported targets even if exploit/code-execution experiments exist.
 - Category 2 output validation should be strengthened beyond the current file-size gate before treating every output as cryptographic proof.
+
+## Use at your own risk
+
+Universal iPod Firmware Decryptor is experimental reverse-engineering software intended for research, preservation, and firmware analysis. It performs low-level USB communication, may stop Windows Apple-device services, invokes external exploit/decryption tooling, and can upload and execute RAM-resident payloads on compatible devices.
+
+The software is provided without warranty. The author is not responsible for data loss, device malfunction, firmware corruption, security issues, antivirus detections, or any other damage resulting from its use. Review the source code, verify external dependencies, maintain device and data backups, and use an isolated test system where possible.
+
+Microsoft Defender may flag the unsigned PyInstaller executable as `Trojan:Win32/Wacatac.B!ml`. This may be a heuristic false positive caused by the executable's packaging, native USB access, subprocess execution, administrator privileges, and embedded device payloads, but it has not been independently cleared by Microsoft. Users should whitelist or restore the executable at their own risk. Building from source is recommended for users who want to review the implementation directly.
