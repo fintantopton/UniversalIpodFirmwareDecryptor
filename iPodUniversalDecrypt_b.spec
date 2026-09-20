@@ -8,6 +8,7 @@ def _dependency(name):
     for path in (
         os.path.join('vendor', name),
         os.path.join('..', 'AppPatcher', 'wInd3x-src', name),
+        name,
     ):
         if os.path.isfile(path):
             return (path, '.')
@@ -48,7 +49,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='iPodUniversalDecrypt_v3.2.2_b32',
+    name='iPodUniversalDecrypt_v3.2.3_b33',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

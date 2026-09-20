@@ -45,8 +45,8 @@ from mse_members import (  # noqa: E402
 # Constants
 # ============================================================
 APP_NAME = "Universal iPod Firmware Decryptor"
-APP_VERSION = "3.2.2"
-APP_BUILD = 32
+APP_VERSION = "3.2.3"
+APP_BUILD = 33
 
 APPLE_VID = "05ac"
 DFU_PIDS = ["1223", "1225", "1231", "1232", "1234", "1242", "1250"]
