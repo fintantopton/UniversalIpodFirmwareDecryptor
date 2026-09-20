@@ -45,8 +45,8 @@ from mse_members import (  # noqa: E402
 # Constants
 # ============================================================
 APP_NAME = "Universal iPod Firmware Decryptor"
-APP_VERSION = "3.2.3"
-APP_BUILD = 33
+APP_VERSION = "3.2.5"
+APP_BUILD = 35
 
 APPLE_VID = "05ac"
 DFU_PIDS = ["1223", "1225", "1231", "1232", "1234", "1242", "1250"]
@@ -498,14 +498,32 @@ class UniversalDecryptorApp:
         ttk.Label(footer_frame, text="2026 Created by Ricardo de Koning",
                   font=("Segoe UI", 8), foreground="gray").pack(side="left")
 
-        # --- Content area: packed directly, window height tracks it ---
-        # Bottom padding is intentionally 0 (vs. 10 on the other sides) so
-        # there's no dead strip between the last section (Log) and the
-        # footer separator; the Log frame's own pady already provides a
-        # small, consistent gap above the footer.
-        main_frame = ttk.Frame(self.root, padding=(10, 10, 10, 0))
+        # --- Scrollable content area above the pinned footer ---
+        content_host = ttk.Frame(self.root)
+        content_host.pack(side="top", fill="both", expand=True)
+        self.content_canvas = tk.Canvas(content_host, highlightthickness=0)
+        self.content_scrollbar = ttk.Scrollbar(
+            content_host, orient="vertical", command=self.content_canvas.yview
+        )
+        self.content_canvas.configure(yscrollcommand=self.content_scrollbar.set)
+        self.content_canvas.pack(side="left", fill="both", expand=True)
+        self.content_scrollbar.pack(side="right", fill="y")
+
+        main_frame = ttk.Frame(self.content_canvas, padding=(10, 10, 10, 0))
         self.main_frame = main_frame
-        main_frame.pack(side="top", fill="both", expand=True)
+        self._content_window = self.content_canvas.create_window(
+            (0, 0), window=main_frame, anchor="nw"
+        )
+
+        def update_scrollregion(_event=None):
+            self.content_canvas.configure(scrollregion=self.content_canvas.bbox("all"))
+
+        def fit_content_width(event):
+            self.content_canvas.itemconfigure(self._content_window, width=event.width)
+            update_scrollregion()
+
+        main_frame.bind("<Configure>", update_scrollregion)
+        self.content_canvas.bind("<Configure>", fit_content_width)
 
         # Title
         self.title_frame = ttk.Frame(main_frame)
@@ -695,12 +713,15 @@ class UniversalDecryptorApp:
             return
 
         for index, (name, label) in enumerate(options):
+            row, column = divmod(index, 3)
+            cell = ttk.Frame(self.partition_checks_frame)
+            cell.grid(row=row, column=column, sticky="w", padx=(0, 14), pady=2)
             var = tk.BooleanVar(value=checked)
             self.partition_vars[name] = var
-            row = ttk.Frame(self.partition_checks_frame)
-            row.pack(fill="x", pady=(0, 2) if index else (0, 2))
-            ttk.Checkbutton(row, text=name, variable=var).pack(side="left")
-            ttk.Label(row, text=label, foreground="gray").pack(side="left", padx=(8, 0))
+            ttk.Checkbutton(cell, text=name, variable=var).pack(side="left")
+            ttk.Label(cell, text=label, foreground="gray").pack(side="left", padx=(4, 0))
+        for column in range(3):
+            self.partition_checks_frame.columnconfigure(column, weight=1)
         self.partition_hint_label.config(text=hint, foreground="gray")
 
     def _set_static_partition_options(self, names):
@@ -850,21 +871,19 @@ class UniversalDecryptorApp:
         any change that could affect layout height.
         """
         self.root.update_idletasks()
-        self.root.geometry("")  # release any previous fixed size
-        self.root.update_idletasks()
-
-        natural_width = self.root.winfo_reqwidth()
-        natural_height = self.root.winfo_reqheight()
+        content_width = self.main_frame.winfo_reqwidth()
+        content_height = self.main_frame.winfo_reqheight()
+        footer_height = self.btn_frame.winfo_reqheight()
+        scrollbar_width = self.content_scrollbar.winfo_reqwidth()
 
         screen_height = self.root.winfo_screenheight()
         max_height = int(screen_height * 0.9)
-
-        current_width = self.root.winfo_width()
-        width = max(current_width, natural_width, 820)
-        height = min(natural_height, max_height)
+        width = max(820, content_width + scrollbar_width)
+        height = max(460, min(content_height + footer_height + 8, max_height))
 
         self.root.geometry(f"{width}x{height}")
         self.root.update_idletasks()
+        self.content_canvas.configure(scrollregion=self.content_canvas.bbox("all"))
 
     def _on_ipsw_changed(self, *args):
         """Called when IPSW path changes — detect model and update UI."""
