@@ -2,16 +2,23 @@
 
 import os
 
+
+def _dependency(name):
+    """Use portable vendor assets first, then the local development layout."""
+    for path in (
+        os.path.join('vendor', name),
+        os.path.join('..', 'AppPatcher', 'wInd3x-src', name),
+    ):
+        if os.path.isfile(path):
+            return (path, '.')
+    return None
+
+
 _vendor_files = [
-    'wInd3x',
-    'wInd3x-write-musl',
-    'wInd3x-win.exe',
-    'libusb-1.0.dll',
-    'zadig.exe',
+    'wInd3x', 'wInd3x-write-musl', 'wInd3x-win.exe',
+    'libusb-1.0.dll', 'zadig.exe',
 ]
-_datas = [(os.path.join('vendor', name), '.')
-          for name in _vendor_files
-          if os.path.isfile(os.path.join('vendor', name))]
+_datas = [item for item in (_dependency(name) for name in _vendor_files) if item]
 _datas.append(('icon.ico', '.'))
 
 a = Analysis(
@@ -25,7 +32,7 @@ a = Analysis(
     # winusb.dll/setupapi.dll/kernel32.dll, which ship with Windows.
     hiddenimports=['Crypto', 'Crypto.Cipher', 'Crypto.Cipher.AES',
                    'nano2g_device_decrypt', 'nano2g_payloads',
-                   'nano5g_resources'],
+                   'nano5g_resources', 'mse_members'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -41,7 +48,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='iPodUniversalDecrypt_v3.2.0_b30',
+    name='iPodUniversalDecrypt_v3.2.1_b31',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

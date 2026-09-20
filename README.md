@@ -4,7 +4,8 @@ Native Windows application for extracting and decrypting iPod RetailOS (OSOS) fi
 
 ![Universal iPod Firmware Decryptor application window](docs/images/iPodFirmwareDecryptor.png)
 
-**Current release:** v3.2.0 / build 30  
+**Current source:** v3.2.1 / build 31  
+**Latest published executable:** v3.2.0 / build 30  
 **Platform:** Windows 10/11  
 **Release executable:** See the GitHub Releases page. The `.exe` is intentionally distributed as a release asset, not committed to the source repository.
 

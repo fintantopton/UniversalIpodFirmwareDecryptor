@@ -35,13 +35,18 @@ from nano5g_resources import (  # noqa: E402
     Nano5GResourceError,
     extract_silver_images_db,
 )
+from mse_members import (  # noqa: E402
+    MseFormatError,
+    MseMember,
+    parse_mse_members,
+)
 
 # ============================================================
 # Constants
 # ============================================================
 APP_NAME = "Universal iPod Firmware Decryptor"
-APP_VERSION = "3.2.0"
-APP_BUILD = 30
+APP_VERSION = "3.2.1"
+APP_BUILD = 31
 
 APPLE_VID = "05ac"
 DFU_PIDS = ["1223", "1225", "1231", "1232", "1234", "1242", "1250"]
@@ -451,6 +456,8 @@ class UniversalDecryptorApp:
         self.detected_model = None
         self.detected_category = None
         self.is_running = False
+        self.category2_members = {}
+        self._category2_scan_token = 0
 
         self._build_ui()
         self._autosize_window()
@@ -580,20 +587,19 @@ class UniversalDecryptorApp:
         # on demand by _nano2g_set_device_info() instead.
         self.nano2g_device_info_label = ttk.Label(self.nano2g_device_frame, text="")
 
-        # Partition selection frame (for Category 2, 3, and 4)
-        self.partition_frame = ttk.LabelFrame(main_frame, text="Partitions to Decrypt", padding=8)
-        partition_names = ["osos", "aupd", "rsrc", "disk", "diag",
-                           "appl", "chrg", "bdsw", "bdhw", "lbat"]
+        # Partition selection is populated from the actual MSE directory
+        # for Category 2 firmware. Category 3/4 uses the narrow validated
+        # three-member layout instead of the old universal ten-item list.
+        self.partition_frame = ttk.LabelFrame(main_frame, text="Firmware Members", padding=8)
         self.partition_vars = {}
-        row1_frame = ttk.Frame(self.partition_frame)
-        row1_frame.pack(fill="x")
-        row2_frame = ttk.Frame(self.partition_frame)
-        row2_frame.pack(fill="x", pady=(3, 0))
-        for i, name in enumerate(partition_names):
-            var = tk.BooleanVar(value=True)
-            self.partition_vars[name] = var
-            parent_row = row1_frame if i < 5 else row2_frame
-            ttk.Checkbutton(parent_row, text=name, variable=var).pack(side="left", padx=(0, 12))
+        self.partition_checks_frame = ttk.Frame(self.partition_frame)
+        self.partition_checks_frame.pack(fill="x")
+        self.partition_hint_label = ttk.Label(
+            self.partition_frame,
+            text="Select an IPSW to read its actual firmware members.",
+            foreground="gray",
+        )
+        self.partition_hint_label.pack(anchor="w", pady=(3, 0))
 
         # Nano 5G's Silver resource database is a file inside the plaintext
         # RSRC FAT16 image, not a standalone MSE partition. Keep the option
@@ -672,6 +678,88 @@ class UniversalDecryptorApp:
         """Update status label."""
         self.status_label.config(text=msg)
         self.root.update_idletasks()
+
+    def _set_partition_options(self, options, hint, *, checked=True):
+        """Rebuild the visible member checklist from actual firmware data."""
+        for child in self.partition_checks_frame.winfo_children():
+            child.destroy()
+        self.partition_vars = {}
+
+        if not options:
+            self.partition_hint_label.config(text=hint, foreground="gray")
+            return
+
+        for index, (name, label) in enumerate(options):
+            var = tk.BooleanVar(value=checked)
+            self.partition_vars[name] = var
+            row = ttk.Frame(self.partition_checks_frame)
+            row.pack(fill="x", pady=(0, 2) if index else (0, 2))
+            ttk.Checkbutton(row, text=name, variable=var).pack(side="left")
+            ttk.Label(row, text=label, foreground="gray").pack(side="left", padx=(8, 0))
+        self.partition_hint_label.config(text=hint, foreground="gray")
+
+    def _set_static_partition_options(self, names):
+        """Set the narrow validated member list for non-MSE dynamic paths."""
+        self.category2_members = {}
+        self._set_partition_options(
+            [(name, "validated partition") for name in names],
+            "Select the partitions to process.",
+        )
+
+    def _discover_category2_members(self, ipsw_path, family_id):
+        """Read the selected IPSW's MSE table on a worker thread and rebuild
+        the Category 2 checklist from real members, not generic names."""
+        self._category2_scan_token += 1
+        token = self._category2_scan_token
+        self.category2_members = {}
+        self._set_partition_options([], "Reading actual MSE members...")
+
+        def scan():
+            try:
+                with zipfile.ZipFile(ipsw_path, "r") as archive:
+                    firmware_name = next(
+                        name for name in archive.namelist()
+                        if (name.lower().startswith("firmware") and
+                            not name.lower().endswith(".plist") and
+                            "/" not in name)
+                    )
+                    firmware = archive.read(firmware_name)
+                members = parse_mse_members(
+                    firmware, nano3_layout=family_id in (26, 27)
+                )
+                error = None
+            except (OSError, StopIteration, zipfile.BadZipFile, MseFormatError) as exc:
+                members = []
+                error = str(exc)
+            self.root.after(
+                0, self._apply_category2_members,
+                token, ipsw_path, family_id, members, error,
+            )
+
+        threading.Thread(target=scan, daemon=True).start()
+
+    def _apply_category2_members(self, token, ipsw_path, family_id, members, error):
+        """Apply background MSE discovery on the Tk UI thread."""
+        if token != self._category2_scan_token or ipsw_path != self.ipsw_path.get():
+            return
+        if error:
+            self.category2_members = {}
+            self._set_partition_options([], f"Could not read MSE members: {error}")
+        else:
+            self.category2_members = {member.name: member for member in members}
+            options = []
+            for member in members:
+                action = "decrypt via device AES" if member.is_encrypted else "export raw/plaintext"
+                options.append((member.name, f"{action} — {member.logical_length:,} bytes"))
+            self._set_partition_options(options, "Members discovered from this IPSW's MSE directory.")
+
+        self._repack_ui(
+            show_hardware=True,
+            show_partitions=True,
+            show_silverimagesdb=(family_id == 34 and "rsrc" in self.category2_members),
+        )
+        self.driver_frame.pack(fill="x", pady=(5, 0))
+        self._autosize_window()
 
     def _copy_log(self):
         """Copy log to clipboard and save to file."""
@@ -801,14 +889,20 @@ class UniversalDecryptorApp:
                                 foreground="black", font=("Segoe UI", 9, "bold"))
 
         if category == 1:
+            self._category2_scan_token += 1
+            self._set_partition_options([], "No partition selection is required for this plaintext firmware.")
             self.mode_label.config(text="✅ No device needed (unencrypted)",
                                    foreground="green")
             self._repack_ui(show_hardware=False, show_partitions=False)
         elif category == 3:
+            self._category2_scan_token += 1
+            self._set_static_partition_options(["osos", "aupd", "rsrc"])
             self.mode_label.config(text="🔑 Software decrypt (no device needed)",
                                    foreground="green")
             self._repack_ui(show_hardware=False, show_partitions=True)
         elif category == 4:
+            self._category2_scan_token += 1
+            self._set_static_partition_options(["osos", "aupd", "rsrc"])
             self.mode_label.config(
                 text="🔐 Hardware AES via Notes exploit (device required)",
                 foreground="blue")
@@ -819,12 +913,12 @@ class UniversalDecryptorApp:
             self._repack_ui(
                 show_hardware=True,
                 show_partitions=True,
-                show_silverimagesdb=(family_id == 34),
+                show_silverimagesdb=False,
             )
-            # Show driver buttons for ALL Category 2
             self.driver_frame.pack(fill="x", pady=(5, 0))
             self._autosize_window()
             self._check_prerequisites()
+            self._discover_category2_members(path, family_id)
         else:
             self.mode_label.config(text="❓ Unknown category", foreground="red")
             self._repack_ui(show_hardware=False, show_partitions=False)
@@ -900,9 +994,9 @@ class UniversalDecryptorApp:
             self.output_path.set(path)
 
     def _get_selected_partitions(self):
-        """Return checked MSE partitions plus the optional Nano 5G file."""
+        """Return the user-selected actual MSE members plus optional Nano 5G export."""
         selected = [name for name, var in self.partition_vars.items() if var.get()]
-        if (self.detected_family_id == 34 and
+        if (self.detected_family_id == 34 and "rsrc" in self.category2_members and
                 self.silverimagesdb_var.get()):
             selected.append("silverimagesdb")
         return selected
@@ -1687,61 +1781,64 @@ class UniversalDecryptorApp:
             self._set_status("Failed: Invalid IPSW")
             return
 
-        # Save to temp and run MSE extract natively
-        temp_dir = os.environ.get('TEMP', 'C:\\Temp')
-        temp_fw = os.path.join(temp_dir, 'ipod_fw_enc.bin')
-        temp_mse_dir = os.path.join(temp_dir, 'ipod_mse_out')
-        os.makedirs(temp_mse_dir, exist_ok=True)
-        with open(temp_fw, 'wb') as f:
-            f.write(fw_data)
+        # Parse and materialize the selected firmware's actual MSE members.
+        # This avoids stale files in a shared temp directory and does not rely
+        # on wInd3x's generation-guessing MSE extractor for Classic bundles.
+        temp_fw = None
+        try:
+            members = parse_mse_members(
+                fw_data, nano3_layout=self.detected_family_id in (26, 27)
+            )
+        except MseFormatError as exc:
+            self._log(f"ERROR: Cannot parse MSE member directory: {exc}")
+            self._set_status("Failed: Invalid MSE directory")
+            return
+        self.category2_members = {member.name: member for member in members}
 
-        self._log("  Running MSE extract (native)...")
-        ok, out, err = run_native_wind3x(
-            ['mse', 'extract', temp_fw, '-o', temp_mse_dir + '\\'], timeout=60)
-        self._log(f"  {(out + err)[:300]}" if (out + err) else "  (no output)")
-
-        # Determine which partitions to decrypt
         selected_partitions = self._get_selected_partitions()
         if not selected_partitions:
-            self._log("ERROR: No partitions selected!")
-            self._set_status("Failed: No partitions selected")
-            self._cleanup_temp(temp_fw)
+            self._log("ERROR: No firmware members selected!")
+            self._set_status("Failed: No firmware members selected")
+            return
+        unknown_members = [
+            name for name in selected_partitions
+            if name != "silverimagesdb" and name not in self.category2_members
+        ]
+        if unknown_members:
+            self._log(f"ERROR: Unknown MSE members selected: {', '.join(unknown_members)}")
+            self._set_status("Failed: Invalid member selection")
             return
 
-        # Determine which selected MSE members exist. SilverImagesDB is a
-        # file inside Nano 5G RSRC, so selecting it implicitly requires the
-        # RSRC member even if the user did not select the raw rsrc export.
+        # SilverImagesDB is inside Nano 5G RSRC, so selecting it implicitly
+        # materializes rsrc without requiring the raw rsrc checkbox.
         is_nano5g = self.detected_family_id == 34
         selected_mse_partitions = [
-            name for name in selected_partitions if name != 'silverimagesdb'
+            name for name in selected_partitions if name != "silverimagesdb"
         ]
-        if is_nano5g and 'silverimagesdb' in selected_partitions:
-            if 'rsrc' not in selected_mse_partitions:
-                selected_mse_partitions.append('rsrc')
+        if is_nano5g and "silverimagesdb" in selected_partitions and "rsrc" not in selected_mse_partitions:
+            selected_mse_partitions.append("rsrc")
 
+        temp_mse_dir = tempfile.mkdtemp(prefix="ipod_mse_")
         available_partitions = []
-        for part_name in selected_mse_partitions:
-            part_path = os.path.join(temp_mse_dir, part_name)
-            if os.path.isfile(part_path) and os.path.getsize(part_path) > 0:
+        try:
+            for part_name in selected_mse_partitions:
+                member = self.category2_members[part_name]
+                part_path = os.path.join(temp_mse_dir, part_name)
+                with open(part_path, "wb") as member_file:
+                    member_file.write(
+                        fw_data[member.logical_offset:member.logical_offset + member.logical_length]
+                    )
                 available_partitions.append(part_name)
+        except OSError as exc:
+            self._log(f"ERROR: Could not materialize MSE members: {exc}")
+            self._set_status("Failed: MSE member extraction")
+            shutil.rmtree(temp_mse_dir, ignore_errors=True)
+            return
 
-        if not available_partitions:
-            # Fallback: if MSE extraction failed, use raw firmware for osos only
-            if 'osos' in selected_mse_partitions:
-                self._log("  MSE failed, using raw firmware as osos input...")
-                available_partitions = ['osos']
-                osos_fallback = os.path.join(temp_mse_dir, 'osos')
-                shutil.copy2(temp_fw, osos_fallback)
-            else:
-                self._log("ERROR: MSE extraction failed and no selected data exists!")
-                self._set_status("Failed: No partition data")
-                self._cleanup_temp(temp_fw)
-                return
-
-        self._log(f"  ✅ MSE members available: {', '.join(available_partitions)}")
+        self._log(f"  ✅ Actual MSE members selected: {', '.join(available_partitions)}")
         for part_name in available_partitions:
-            part_path = os.path.join(temp_mse_dir, part_name)
-            self._log(f"     {part_name}: {os.path.getsize(part_path):,} bytes")
+            member = self.category2_members[part_name]
+            self._log(f"     {part_name}: {member.logical_length:,} bytes ({member.detail})")
         self.progress["value"] = 8
 
         output_dir = self.output_path.get()
@@ -1764,9 +1861,33 @@ class UniversalDecryptorApp:
                 self._cleanup_temp(temp_fw)
                 return
 
+        # Raw/plaintext MSE members (for example Classic RSRC and HASH)
+        # are copied byte-for-byte. Only validated encrypted IMG1 members
+        # are sent to DFU/device AES.
+        raw_partitions = [
+            name for name in available_partitions
+            if not self.category2_members[name].is_encrypted
+        ]
+        for part_name in raw_partitions:
+            if is_nano5g and part_name == "rsrc":
+                continue
+            source_path = os.path.join(temp_mse_dir, part_name)
+            output_path = os.path.join(output_dir, f"{part_name}.bin")
+            try:
+                shutil.copyfile(source_path, output_path)
+            except OSError as exc:
+                self._log(f"  ❌ Could not export raw {part_name}: {exc}")
+                self._set_status(f"Failed: {part_name} export")
+                self._cleanup_temp(temp_fw)
+                shutil.rmtree(temp_mse_dir, ignore_errors=True)
+                return
+            size = os.path.getsize(output_path)
+            self._log(f"  ✅ {part_name}.bin exported raw/plaintext: {size:,} bytes")
+            exported_partitions.append(part_name)
+
         device_partitions = [
             name for name in available_partitions
-            if not (is_nano5g and name == 'rsrc')
+            if self.category2_members[name].is_encrypted
         ]
 
         # Step 3: haxdfu (BootROM exploit) — only when encrypted data
@@ -1903,8 +2024,9 @@ class UniversalDecryptorApp:
                             f"Outputs: {', '.join(exported_partitions)}\n"
                             f"Output directory: {output_dir}")
 
-        # Cleanup temp
+        # Cleanup temporary materialized MSE members.
         self._cleanup_temp(temp_fw)
+        shutil.rmtree(temp_mse_dir, ignore_errors=True)
 
         # Restart Apple services
         for svc in ["Apple Mobile Device Service", "iPodService"]:
