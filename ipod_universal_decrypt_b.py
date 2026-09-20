@@ -45,8 +45,8 @@ from mse_members import (  # noqa: E402
 # Constants
 # ============================================================
 APP_NAME = "Universal iPod Firmware Decryptor"
-APP_VERSION = "3.2.1"
-APP_BUILD = 31
+APP_VERSION = "3.2.2"
+APP_BUILD = 32
 
 APPLE_VID = "05ac"
 DFU_PIDS = ["1223", "1225", "1231", "1232", "1234", "1242", "1250"]
@@ -59,6 +59,11 @@ ZADIG_NAME = 'zadig.exe'
 RECOVERY_SUFFIX = '.recovery.dat'
 PROGRESS_SUFFIX = '.progress.json'
 MAX_RETRY_ATTEMPTS = 10
+
+# These models can be parsed and their plaintext RSRC can be inspected, but
+# the current S5Late DFU state corruption prevents the repeated RCE/AES loop
+# required for the app's decrypt command. Do not present them as supported.
+UNSUPPORTED_CATEGORY2_FAMILIES = frozenset({36, 37})
 
 # Nano 2G (S5L8701) AES-128-CBC key — publicly known "0x837" key
 # Source: TheAppleWiki AES Keys page (derived from S5L8900 GID key)
@@ -908,17 +913,30 @@ class UniversalDecryptorApp:
                 foreground="blue")
             self._repack_ui(show_hardware=False, show_partitions=True, show_nano2g=True)
         elif category == 2:
-            self.mode_label.config(text="🔐 Hardware AES (device required)",
-                                   foreground="blue")
-            self._repack_ui(
-                show_hardware=True,
-                show_partitions=True,
-                show_silverimagesdb=False,
-            )
-            self.driver_frame.pack(fill="x", pady=(5, 0))
-            self._autosize_window()
-            self._check_prerequisites()
-            self._discover_category2_members(path, family_id)
+            if family_id in UNSUPPORTED_CATEGORY2_FAMILIES:
+                self._category2_scan_token += 1
+                self.category2_members = {}
+                self._set_partition_options(
+                    [],
+                    "This model's S5Late path is research-only; repeated firmware decryption is not supported.",
+                )
+                self.mode_label.config(
+                    text="⚠️ Hardware AES decrypt not supported for this model",
+                    foreground="orange",
+                )
+                self._repack_ui(show_hardware=False, show_partitions=True)
+            else:
+                self.mode_label.config(text="🔐 Hardware AES (device required)",
+                                       foreground="blue")
+                self._repack_ui(
+                    show_hardware=True,
+                    show_partitions=True,
+                    show_silverimagesdb=False,
+                )
+                self.driver_frame.pack(fill="x", pady=(5, 0))
+                self._autosize_window()
+                self._check_prerequisites()
+                self._discover_category2_members(path, family_id)
         else:
             self.mode_label.config(text="❓ Unknown category", foreground="red")
             self._repack_ui(show_hardware=False, show_partitions=False)
