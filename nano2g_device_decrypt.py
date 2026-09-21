@@ -29,6 +29,7 @@ import base64
 import ctypes
 import re
 import struct
+import subprocess
 import time
 import uuid
 import zlib
@@ -85,6 +86,7 @@ IBUGGER_RAM_STACK = IBUGGER_RAM_DATA
 # ============================================================
 DIGCF_PRESENT = 0x00000002
 DIGCF_DEVICEINTERFACE = 0x00000010
+DIGCF_ALLCLASSES = 0x00000004
 ERROR_NO_MORE_ITEMS = 259
 ERROR_IO_PENDING = 997
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
@@ -114,6 +116,15 @@ class SP_DEVICE_INTERFACE_DATA(ctypes.Structure):
         ("cbSize", wintypes.DWORD),
         ("InterfaceClassGuid", GUID),
         ("Flags", wintypes.DWORD),
+        ("Reserved", ctypes.c_void_p),
+    ]
+
+
+class SP_DEVINFO_DATA(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("ClassGuid", GUID),
+        ("DevInst", wintypes.DWORD),
         ("Reserved", ctypes.c_void_p),
     ]
 
@@ -162,6 +173,95 @@ class TransportError(RuntimeError):
     pass
 
 
+# Windows' official, stable WinUSB device setup class GUID. This is a
+# fixed value assigned by Microsoft (see winusb.inf / the WinUSB driver
+# installation docs) and does NOT change between Zadig/libwdi installs.
+# It is deliberately NOT the same thing as IBUGGER_INTERFACE_GUID above,
+# which is a per-install *device interface* GUID that libwdi's generated
+# driver package registers — that one genuinely can differ between Zadig
+# runs on different PCs (or even re-installs on the same PC), which is
+# exactly what caused _find_interface() to report "not found" on a PC
+# where WinUSB was, in fact, correctly bound to the device.
+_WINUSB_CLASS_GUID = "{88BAE032-5A81-49F0-BC3D-A4FF138216D6}"
+
+
+def _ibugger_pnp_presence() -> str:
+    """Check whether a PID_8642 device exists in Windows PnP, and whether
+    WinUSB (Microsoft's winusb.sys, any install) is actually bound to it —
+    independent of this app's own hardcoded IBUGGER_INTERFACE_GUID.
+
+    _find_interface() only succeeds if WinUSB happens to have registered
+    exactly that one device interface GUID. libwdi (which Zadig uses to
+    generate its driver packages) mints a fresh interface GUID per install
+    unless the exact same driver package is reused, so a PC where Zadig
+    was run separately can have WinUSB genuinely, correctly bound to the
+    device, while still using a different interface GUID than the one
+    hardcoded here. In that case _find_interface() finding nothing does
+    NOT mean WinUSB isn't installed - it means this app doesn't yet know
+    that PC's specific interface GUID.
+
+    This function checks the device's PnP *class GUID* instead, which for
+    any WinUSB-bound device is always the same well-known Microsoft value
+    (_WINUSB_CLASS_GUID), regardless of which libwdi/Zadig run installed
+    it. That distinguishes "WinUSB is genuinely not installed for this
+    device" from "WinUSB is installed, but under an interface GUID this
+    app doesn't recognize yet".
+
+    Returns one of:
+      "present_winusb_unrecognized_guid" - WinUSB IS bound (class GUID
+          matches), but not under the interface GUID this app expects.
+          This is a bug in this app's assumptions, not a driver problem.
+      "present_no_winusb" - device present, but bound to some other
+          (non-WinUSB) driver.
+      "not_present" - no PID_8642 device found in PnP at all.
+      "unknown" - pnputil unavailable/failed; caller should fall back to
+          a generic message rather than assert either way.
+    """
+    try:
+        result = subprocess.run(
+            ['pnputil', '/enum-devices', '/connected', '/drivers'],
+            capture_output=True, text=True, timeout=10,
+            creationflags=0x08000000,
+        )
+    except Exception:
+        return "unknown"
+    if result.returncode != 0 and not result.stdout:
+        return "unknown"
+
+    vid_tag = f'VID_{IBUGGER_VID:04X}'
+    pid_tag = f'PID_{IBUGGER_PID:04X}'
+    lines = result.stdout.splitlines()
+
+    # pnputil prints one record per "Instance ID:" line, followed by that
+    # device's own fields (Class GUID, Status, Driver Name, ...) until the
+    # next "Instance ID:" line. Find our device's record and inspect only
+    # the fields that belong to it, not the whole (possibly huge) output.
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith('Instance ID:'):
+            continue
+        upper = stripped.upper()
+        if vid_tag not in upper or pid_tag not in upper:
+            continue
+        # Found our device's record. Scan forward until the next
+        # "Instance ID:" (or end of output) for its Class GUID.
+        for record_line in lines[i + 1:]:
+            record_stripped = record_line.strip()
+            if record_stripped.startswith('Instance ID:'):
+                break
+            if record_stripped.upper().startswith('CLASS GUID:'):
+                class_guid = record_stripped.split(':', 1)[1].strip().upper()
+                if class_guid == _WINUSB_CLASS_GUID:
+                    return "present_winusb_unrecognized_guid"
+                return "present_no_winusb"
+        # Record found but no Class GUID field seen before the next device
+        # (shouldn't normally happen) - fall back to "present, unknown
+        # driver" rather than silently returning not_present.
+        return "present_no_winusb"
+
+    return "not_present"
+
+
 def _load_apis():
     setupapi = ctypes.WinDLL("setupapi", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -183,6 +283,20 @@ def _load_apis():
     setupapi.SetupDiGetDeviceInterfaceDetailW.restype = wintypes.BOOL
     setupapi.SetupDiDestroyDeviceInfoList.argtypes = [wintypes.HANDLE]
     setupapi.SetupDiDestroyDeviceInfoList.restype = wintypes.BOOL
+    setupapi.SetupDiEnumDeviceInfo.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(SP_DEVINFO_DATA)
+    ]
+    setupapi.SetupDiEnumDeviceInfo.restype = wintypes.BOOL
+    setupapi.SetupDiGetDeviceInstanceIdW.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(SP_DEVINFO_DATA),
+        wintypes.LPWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+    ]
+    setupapi.SetupDiGetDeviceInstanceIdW.restype = wintypes.BOOL
+    setupapi.SetupDiOpenDevRegKey.argtypes = [
+        wintypes.HANDLE, ctypes.POINTER(SP_DEVINFO_DATA), wintypes.DWORD,
+        wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+    ]
+    setupapi.SetupDiOpenDevRegKey.restype = wintypes.HKEY
 
     kernel32.CreateFileW.argtypes = [
         wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
@@ -224,7 +338,9 @@ def _load_apis():
     return setupapi, kernel32, winusb
 
 
-def _find_interface(setupapi, vid, pid, interface_guid):
+def _enum_interface_paths(setupapi, vid, pid, interface_guid):
+    """Yield every device interface path under interface_guid whose device
+    path contains the given VID/PID, regardless of instance ordering."""
     guid = _guid_from_uuid(interface_guid)
     info_set = setupapi.SetupDiGetClassDevsW(
         ctypes.byref(guid), None, None, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE
@@ -257,9 +373,146 @@ def _find_interface(setupapi, vid, pid, interface_guid):
                 continue
             path = ctypes.wstring_at(ctypes.addressof(detail) + 4)
             if re.search(rf"vid_{vid:04x}&pid_{pid:04x}", path, re.IGNORECASE):
-                return path
+                yield path
     finally:
         setupapi.SetupDiDestroyDeviceInfoList(info_set)
+
+
+_REG_DEVICE_INTERFACE_GUIDS_VALUE = "DeviceInterfaceGUIDs"
+_REG_DEVICE_INTERFACE_GUID_VALUE = "DeviceInterfaceGUID"
+DICS_FLAG_GLOBAL = 0x00000001
+DIREG_DEV = 0x00000001
+KEY_READ = 0x20019
+REG_MULTI_SZ = 7
+REG_SZ = 1
+ERROR_SUCCESS = 0
+
+
+def _discover_device_interface_guids(setupapi, vid, pid):
+    """Read the actual DeviceInterfaceGUID(s) registry value that libwdi's
+    generated .inf wrote for this specific VID/PID device on this specific
+    PC, by opening the device's own hardware registry key directly.
+
+    This is the authoritative source: whatever GUID(s) appear here are
+    exactly what SetupDiEnumDeviceInterfaces can enumerate against for this
+    device, regardless of which install/version of Zadig wrote them. The
+    well-known WinUSB *class* GUID cannot be used for this purpose - class
+    GUIDs group devices for driver-install purposes, but WinUSB always
+    registers its actual runtime device interface under a GUID declared in
+    the device-specific INF's [Dev_AddReg] section (DeviceInterfaceGUIDs),
+    not under the class GUID itself.
+
+    Returns a list of uuid.UUID (usually 0 or 1 entries; DeviceInterfaceGUIDs
+    is a REG_MULTI_SZ and can technically hold more than one).
+    """
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi32.RegQueryValueExW.argtypes = [
+        wintypes.HKEY, wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.RegQueryValueExW.restype = wintypes.LONG
+    advapi32.RegCloseKey.argtypes = [wintypes.HKEY]
+    advapi32.RegCloseKey.restype = wintypes.LONG
+
+    info_set = setupapi.SetupDiGetClassDevsW(
+        None, None, None, DIGCF_PRESENT | DIGCF_ALLCLASSES
+    )
+    if info_set == INVALID_HANDLE_VALUE:
+        return []
+
+    found: list[uuid.UUID] = []
+    try:
+        index = 0
+        while True:
+            devinfo = SP_DEVINFO_DATA()
+            devinfo.cbSize = ctypes.sizeof(SP_DEVINFO_DATA)
+            if not setupapi.SetupDiEnumDeviceInfo(info_set, index, ctypes.byref(devinfo)):
+                if ctypes.get_last_error() == ERROR_NO_MORE_ITEMS:
+                    break
+                index += 1
+                continue
+            index += 1
+
+            required = wintypes.DWORD()
+            setupapi.SetupDiGetDeviceInstanceIdW(
+                info_set, ctypes.byref(devinfo), None, 0, ctypes.byref(required)
+            )
+            if required.value == 0:
+                continue
+            buf = ctypes.create_unicode_buffer(required.value)
+            if not setupapi.SetupDiGetDeviceInstanceIdW(
+                info_set, ctypes.byref(devinfo), buf, required.value, ctypes.byref(required)
+            ):
+                continue
+            instance_id = buf.value
+            if not re.search(rf"vid_{vid:04x}&pid_{pid:04x}", instance_id, re.IGNORECASE):
+                continue
+
+            hkey = setupapi.SetupDiOpenDevRegKey(
+                info_set, ctypes.byref(devinfo), DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ
+            )
+            if not hkey or hkey == INVALID_HANDLE_VALUE:
+                continue
+            try:
+                for value_name in (_REG_DEVICE_INTERFACE_GUIDS_VALUE,
+                                   _REG_DEVICE_INTERFACE_GUID_VALUE):
+                    value_type = wintypes.DWORD()
+                    value_size = wintypes.DWORD()
+                    rc = advapi32.RegQueryValueExW(
+                        hkey, value_name, None, ctypes.byref(value_type),
+                        None, ctypes.byref(value_size),
+                    )
+                    if rc != ERROR_SUCCESS or value_size.value == 0:
+                        continue
+                    raw = ctypes.create_unicode_buffer(value_size.value // 2 + 1)
+                    rc = advapi32.RegQueryValueExW(
+                        hkey, value_name, None, ctypes.byref(value_type),
+                        ctypes.cast(raw, ctypes.c_void_p), ctypes.byref(value_size),
+                    )
+                    if rc != ERROR_SUCCESS:
+                        continue
+                    raw_bytes = ctypes.string_at(raw, value_size.value)
+                    text = raw_bytes.decode("utf-16-le", errors="ignore")
+                    for candidate in text.split("\x00"):
+                        candidate = candidate.strip().strip("{}")
+                        if not candidate:
+                            continue
+                        try:
+                            found.append(uuid.UUID(candidate))
+                        except ValueError:
+                            continue
+                    if found:
+                        break
+            finally:
+                advapi32.RegCloseKey(hkey)
+    finally:
+        setupapi.SetupDiDestroyDeviceInfoList(info_set)
+    return found
+
+
+def _find_interface(setupapi, vid, pid, interface_guid):
+    """Find a WinUSB device interface path for the given VID/PID.
+
+    Tries this app's known interface_guid first (fast path — matches when
+    the current PC's Zadig/libwdi install happens to use the same GUID as
+    whatever install this app's constant was recorded from). If that finds
+    nothing, discovers the actual DeviceInterfaceGUID(s) this specific PC's
+    driver install registered for this VID/PID directly from the device's
+    own registry key, and retries with each of those. libwdi mints a fresh
+    interface GUID per install, so a different PC (or a fresh Zadig
+    re-install on the same PC) can have WinUSB genuinely, correctly bound
+    while using an interface GUID this app has never seen before; reading
+    it directly from the device's own registration is the only way to
+    reliably find it (the WinUSB device *class* GUID is a different thing
+    entirely and cannot be enumerated as a device interface).
+    """
+    for path in _enum_interface_paths(setupapi, vid, pid, interface_guid):
+        return path
+    for discovered_guid in _discover_device_interface_guids(setupapi, vid, pid):
+        if discovered_guid == interface_guid:
+            continue
+        for path in _enum_interface_paths(setupapi, vid, pid, discovered_guid):
+            return path
     return None
 
 
@@ -286,10 +539,43 @@ class IBuggerTransport:
             self.setupapi, IBUGGER_VID, IBUGGER_PID, IBUGGER_INTERFACE_GUID
         )
         if not path:
-            raise DeviceNotFoundError(
-                "Unified iBugger (VID_FFFF&PID_8642) not found. "
-                "Stage loader.htm in Notes and eject/reconnect the iPod."
-            )
+            presence = _ibugger_pnp_presence()
+            if presence == "present_winusb_unrecognized_guid":
+                raise DeviceNotFoundError(
+                    "iPod is enumerating as Unified iBugger (VID_FFFF&PID_8642) "
+                    "and WinUSB IS correctly bound to it on this PC, but its "
+                    "registered device interface could not be opened just now. "
+                    "Try unplugging and reconnecting the iPod once, then retry. "
+                    "If this keeps happening, re-run Zadig's Install/Replace "
+                    "Driver step for this device."
+                )
+            elif presence == "present_no_winusb":
+                raise DeviceNotFoundError(
+                    "iPod is enumerating as Unified iBugger (VID_FFFF&PID_8642), "
+                    "but no WinUSB driver is bound to it on this PC. This is a "
+                    "one-time, per-PC driver setup step, not a problem with the "
+                    "iPod or the loader.htm staging.\n\n"
+                    "Fix: open Zadig, select the 'Unified iBugger' / VID_FFFF "
+                    "PID_8642 device (enable Options > List All Devices if it "
+                    "isn't shown), choose WinUSB as the target driver, and "
+                    "click Install Driver/Replace Driver. Then try again "
+                    "without re-staging loader.htm or resetting the iPod."
+                )
+            elif presence == "not_present":
+                raise DeviceNotFoundError(
+                    "Unified iBugger (VID_FFFF&PID_8642) not found on this PC "
+                    "at all (checked both WinUSB and raw PnP device presence). "
+                    "Stage loader.htm in Notes and eject/reconnect the iPod so "
+                    "it boots into iBugger, then try again."
+                )
+            else:
+                raise DeviceNotFoundError(
+                    "Unified iBugger (VID_FFFF&PID_8642) not found. "
+                    "Stage loader.htm in Notes and eject/reconnect the iPod. "
+                    "If the iPod is confirmed booted into iBugger but this "
+                    "keeps failing, check Zadig for a WinUSB driver bound to "
+                    "VID_FFFF&PID_8642 on this PC."
+                )
         handle = self.kernel32.CreateFileW(
             path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
             None, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, None,
@@ -563,16 +849,66 @@ def get_decryptfirmware_bin() -> bytes:
 
 
 def find_device() -> str | None:
-    """Read-only check: return 'loader', 'core', or None."""
+    """Read-only check: return 'loader', 'core', or None.
+
+    Deprecated in favor of find_device_status(), which distinguishes "not
+    present at all" from "present, but WinUSB isn't bound to it" — the two
+    have completely different fixes and this function's callers previously
+    could not tell them apart. Kept for any other existing callers; new
+    code should use find_device_status().
+    """
+    status, stage, _detail = find_device_status()
+    return stage if status == "ok" else None
+
+
+def find_device_status() -> tuple[str, str | None, str]:
+    """Read-only check with a specific, actionable status.
+
+    Returns (status, stage, detail):
+      status="ok"                stage is "loader" or "core"
+      status="not_present"       device not found at all (WinUSB or raw PnP)
+      status="present_no_winusb" device enumerates, but WinUSB isn't bound
+      status="error"             device/transport error after WinUSB opened
+    """
     setupapi, _kernel32, _winusb = _load_apis()
+    # _find_interface() itself now falls back to the well-known WinUSB
+    # class GUID if this app's hardcoded per-install interface GUID isn't
+    # found, so this already recovers on PCs where Zadig registered a
+    # different (but equally valid) interface GUID.
     path = _find_interface(setupapi, IBUGGER_VID, IBUGGER_PID, IBUGGER_INTERFACE_GUID)
     if not path:
-        return None
+        presence = _ibugger_pnp_presence()
+        if presence == "present_winusb_unrecognized_guid":
+            return (
+                "present_winusb_unrecognized_guid", None,
+                "iPod is enumerating as Unified iBugger (VID_FFFF&PID_8642) "
+                "and WinUSB IS correctly bound to it on this PC, but the "
+                "device interface could not be opened. Try unplugging and "
+                "reconnecting the iPod once, then check status again. If "
+                "this persists, re-run Zadig's Install/Replace Driver step "
+                "for this device."
+            )
+        if presence == "present_no_winusb":
+            return (
+                "present_no_winusb", None,
+                "iPod is enumerating as Unified iBugger (VID_FFFF&PID_8642), "
+                "but no WinUSB driver is bound to it on this PC. Open Zadig "
+                "(enable Options > List All Devices if needed), select the "
+                "VID_FFFF PID_8642 device, choose WinUSB, and click Install "
+                "Driver/Replace Driver. This is a one-time per-PC step."
+            )
+        return (
+            "not_present", None,
+            "Unified iBugger (VID_FFFF&PID_8642) not found on this PC at "
+            "all. Stage loader.htm in Notes, then eject/reconnect the iPod "
+            "so it boots into iBugger, and try again."
+        )
     try:
         with IBuggerTransport() as transport:
-            return "core" if transport.core_type == 2 else "loader"
-    except (DeviceNotFoundError, TransportError):
-        return None
+            stage = "core" if transport.core_type == 2 else "loader"
+            return ("ok", stage, "")
+    except (DeviceNotFoundError, TransportError) as exc:
+        return ("error", None, str(exc))
 
 
 def decrypt_partition(payload: bytes, raw_partition: bytes, log=None) -> bytes:

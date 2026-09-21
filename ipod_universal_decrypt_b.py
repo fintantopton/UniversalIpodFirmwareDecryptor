@@ -45,8 +45,8 @@ from mse_members import (  # noqa: E402
 # Constants
 # ============================================================
 APP_NAME = "Universal iPod Firmware Decryptor"
-APP_VERSION = "3.2.5"
-APP_BUILD = 35
+APP_VERSION = "3.2.9"
+APP_BUILD = 39
 
 APPLE_VID = "05ac"
 DFU_PIDS = ["1223", "1225", "1231", "1232", "1234", "1242", "1250"]
@@ -1509,20 +1509,39 @@ class UniversalDecryptorApp:
 
         def check():
             try:
-                stage = nano2g_device.find_device()
+                status, stage, detail = nano2g_device.find_device_status()
             except Exception as exc:
                 self.nano2g_status_label.config(text=f"❌ Error: {exc}")
                 self.root.after(0, self._autosize_window)
                 return
-            if stage == "core":
+            if status == "ok" and stage == "core":
                 self.nano2g_status_label.config(
                     text="✅ iBugger Core is running — ready to decrypt.")
                 self.root.after(0, self._nano2g_set_device_info,
                                 "Stage: Core (device_type=Nano 2G)")
-            elif stage == "loader":
+            elif status == "ok" and stage == "loader":
                 self.nano2g_status_label.config(
                     text="✅ iBugger Loader is running — Core will load automatically when you decrypt.")
                 self.root.after(0, self._nano2g_set_device_info, "Stage: Loader")
+            elif status == "present_winusb_unrecognized_guid":
+                self.nano2g_status_label.config(
+                    text="⚠️ WinUSB is correctly installed, but the device "
+                         "interface couldn't be opened. Try reconnecting "
+                         "the iPod once and checking status again.")
+                self.root.after(0, self._nano2g_set_device_info,
+                                "WinUSB OK — retry after reconnecting iPod")
+                self.root.after(0, self._log, f"iBugger status: {detail}")
+            elif status == "present_no_winusb":
+                self.nano2g_status_label.config(
+                    text="⚠️ iPod detected (VID_FFFF&PID_8642), but WinUSB "
+                         "driver is not bound on this PC. Open Zadig, "
+                         "select the device, install WinUSB, and retry.")
+                self.root.after(0, self._nano2g_set_device_info,
+                                "Driver setup needed on this PC (one-time)")
+                self.root.after(0, self._log, f"iBugger status: {detail}")
+            elif status == "error":
+                self.nano2g_status_label.config(text=f"❌ {detail}")
+                self.root.after(0, self._nano2g_set_device_info, "")
             else:
                 self.nano2g_status_label.config(
                     text="❌ Not found. Stage loader.htm in Notes, then eject/reconnect.")
@@ -1635,12 +1654,7 @@ class UniversalDecryptorApp:
         except nano2g_device.DeviceNotFoundError as exc:
             self._log(f"ERROR: {exc}")
             self._set_status("Failed: iBugger not found")
-            messagebox.showerror(
-                "Device Not Found",
-                f"{exc}\n\n"
-                "Click 'Stage loader.htm to iPod Notes' first, then eject/"
-                "reconnect the iPod and try again."
-            )
+            messagebox.showerror("Device Not Found", str(exc))
             return
         except nano2g_device.TransportError as exc:
             self._log(f"ERROR: {exc}")
