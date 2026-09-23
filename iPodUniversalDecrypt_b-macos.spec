@@ -58,8 +58,9 @@ a = Analysis(
     # The Nano 2G iBugger transport (nano2g_ibugger_usb.py) uses libusb via
     # ctypes — no Python USB dependency is required.
     hiddenimports=[
+        # pycryptodome (AES for the Nano 2G public-key decrypt)
         "Crypto", "Crypto.Cipher", "Crypto.Cipher.AES",
-        "cryptography", "cryptography.hazmat.primitives.ciphers",
+        # local modules (imported lazily in places — make sure they ship)
         "ipod_platform", "ibugger_transport",
         "nano2g_device_decrypt", "nano2g_ibugger_usb", "nano2g_payloads",
         "nano5g_resources", "mse_members",
@@ -73,26 +74,37 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-app = BUNDLE(
-    a,
+# PyInstaller 6.x: BUNDLE takes COLLECT (onedir) / EXE — not the Analysis.
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
     name="iPodFirmwareDecryptor",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=None,
     console=False,  # GUI app; CLI mode still prints to the launching terminal
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+)
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="iPodFirmwareDecryptor",
+)
+app = BUNDLE(
+    coll,
+    name="iPodFirmwareDecryptor.app",
     icon=_icon,
     bundle_identifier="org.freemyipod.UniversalIpodFirmwareDecryptor",
     info_plist={
         "CFBundleShortVersionString": _APP_VERSION,
-        "CFBundleVersion": f"{_APP_VERSION} (build {_APP_BUILD})",
+        # Apple expects a plain dotted/numeric string here (the GUI shows
+        # the full "v3.3.0 (build 40)" from the app source itself).
+        "CFBundleVersion": _APP_BUILD,
         "CFBundleDisplayName": "Universal iPod Firmware Decryptor",
         "NSHumanReadableCopyright":
             "2026 Ricardo de Koning. Experimental research software.",
