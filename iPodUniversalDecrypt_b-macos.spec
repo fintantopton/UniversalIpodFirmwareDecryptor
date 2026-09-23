@@ -16,8 +16,9 @@ import platform
 import re
 
 # Keep the bundle version in sync with the app source.
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "ipod_universal_decrypt_b.py"), encoding="utf-8") as _f:
+# (PyInstaller execs the spec with CWD == the spec's directory; __file__
+# is not defined in the spec namespace on Python 3.13.)
+with open("ipod_universal_decrypt_b.py", encoding="utf-8") as _f:
     _src = _f.read()
 _APP_VERSION = re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', _src, re.MULTILINE).group(1)
 _APP_BUILD = re.search(r'^APP_BUILD\s*=\s*(\d+)', _src, re.MULTILINE).group(1)
