@@ -14,7 +14,7 @@
 #   * macOS 11+ (Apple Silicon or Intel)
 #   * Python 3.9+ WITH Tk (python.org "python3" works out of the box;
 #     Homebrew Python needs: brew install python-tk)
-#   * Optional: Go (to compile wInd3x for macOS when no binary is vendored)
+#   * Optional: Go >= 1.23 (to compile wInd3x for macOS when no binary is vendored)
 #   * Optional: brew install libusb   (Nano 2G iBugger path + wInd3x support)
 #
 # Output:
@@ -62,6 +62,20 @@ if ! "$PYTHON" -c 'import tkinter' >/dev/null 2>&1; then
   exit 1
 fi
 echo "==> Using $($PYTHON -c 'import sys; print(sys.executable)') ($($PYTHON --version 2>&1))"
+
+# ----------------------------------------------------------------------------
+# Go helper: wInd3x requires Go >= 1.23 (log/slog, slices, toolchain line)
+# ----------------------------------------------------------------------------
+GO_MIN="1.23.0"
+go_version_of() {
+  "$1" version 2>/dev/null | awk '{print $3}' | sed 's/^go//'
+}
+go_version_ok() {
+  local ver
+  ver=$(go_version_of "$1")
+  [ -n "$ver" ] || return 1
+  [ "$(printf '%s\n%s\n' "$ver" "$GO_MIN" | sort -V | head -n 1)" = "$GO_MIN" ]
+}
 
 # ----------------------------------------------------------------------------
 # 2. Virtualenv with build deps
@@ -112,26 +126,55 @@ if [[ -f "vendor/$WIND3X_NAME" ]]; then
 fi
 
 if [[ $have_wind3x -eq 0 ]]; then
-  if command -v go >/dev/null 2>&1; then
-    echo "==> Building wInd3x for macOS with Go (go $(go version | awk '{print $3}'))"
+  # Pick the newest suitable Go: Homebrew locations first, then PATH.
+  GO_BIN=""
+  for candidate in /opt/homebrew/bin/go /usr/local/bin/go; do
+    if [[ -x "$candidate" ]] && go_version_ok "$candidate"; then
+      GO_BIN="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$GO_BIN" ]] && command -v go >/dev/null 2>&1 \
+      && go_version_ok "$(command -v go)"; then
+    GO_BIN="$(command -v go)"
+  fi
+
+  if [[ -n "$GO_BIN" ]]; then
+    echo "==> Building wInd3x for macOS with Go ($(go_version_of "$GO_BIN"), $GO_BIN)"
     mkdir -p build
     if [[ ! -d "build/wInd3x-src" ]]; then
       git clone --depth 1 https://github.com/freemyipod/wInd3x.git build/wInd3x-src
     fi
     ( cd build/wInd3x-src \
       && GOOS=darwin GOARCH="$ARCH" CGO_ENABLED=0 \
-         go build -o "../../vendor/$WIND3X_NAME" ./cmd/wInd3x )
+         "$GO_BIN" build -o "../../vendor/$WIND3X_NAME" ./cmd/wInd3x )
     have_wind3x=1
   else
-    echo "WARNING: no wInd3x for macOS found and Go is not installed." >&2
-    echo "         Device-AES decrypt (Category 2) will be unavailable;" >&2
-    echo "         raw/plaintext extraction, Nano 2G and Nano 5G exports still work." >&2
-    echo "         To enable: install Go (brew install go) and re-run this script," >&2
-    echo "         or place a darwin build at vendor/$WIND3X_NAME" >&2
-    echo "         (source: https://github.com/freemyipod/wInd3x)." >&2
+    # Report the best Go we could find so the error message is actionable.
+    found_ver=""
+    for candidate in /opt/homebrew/bin/go /usr/local/bin/go \
+                     "$(command -v go 2>/dev/null)"; do
+      if [[ -n "$candidate" && -x "$candidate" ]]; then
+        found_ver="$(go_version_of "$candidate")"
+        break
+      fi
+    done
+    if [[ -n "$found_ver" ]]; then
+      echo "ERROR: wInd3x requires Go >= $GO_MIN, but found Go $found_ver." >&2
+      echo "  Upgrade it with:   brew install go   (or: brew upgrade go)" >&2
+      echo "  or download:       https://go.dev/dl/" >&2
+    else
+      echo "ERROR: no Go toolchain found, and wInd3x needs Go >= $GO_MIN." >&2
+      echo "  Install it with:   brew install go" >&2
+    fi
+    echo "  (or place a prebuilt binary at vendor/$WIND3X_NAME" >&2
+    echo "   — source: https://github.com/freemyipod/wInd3x)" >&2
     if [[ $REQUIRE_WIND3X -eq 1 ]]; then
       exit 1
     fi
+    echo "WARNING: continuing without wInd3x — device-AES decrypt" >&2
+    echo "         (Category 2) will be unavailable; raw/plaintext" >&2
+    echo "         extraction, Nano 2G and Nano 5G exports still work." >&2
   fi
 fi
 
