@@ -49,7 +49,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='iPodUniversalDecrypt_v3.2.9_b39',
+    name='iPodUniversalDecrypt_v3.3.0_b40',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

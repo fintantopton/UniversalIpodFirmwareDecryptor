@@ -1,6 +1,23 @@
 # Decryption Methods by iPod
 
-This is the operational guide for the active v3.2 application.
+This is the operational guide for the active v3.3 application.
+
+## Platform support
+
+| Platform | Category 1 (plaintext) | Category 2 (device AES) | Category 3 (Nano 2G software) | Category 4 (Nano 2G iBugger) |
+|---|---|---|---|---|
+| Windows 10/11 | ✅ | ✅ (wInd3x-win.exe + WinUSB) | ✅ | ✅ (WinUSB) |
+| macOS 11+ (Apple Silicon / Intel) | ✅ | ✅ for S5L8702 (Classic, Nano 3G) via native darwin wInd3x; Nano 4G/5G gated (Linux-only trampoline) — raw export still works | ✅ | ✅ (libusb) |
+| Linux (dev) | ✅ | ✅ (upstream native paths) | ✅ | ✅ (libusb) |
+
+macOS specifics: no driver installation or elevation is required; the app can
+optionally release/restore Apple USB `launchctl` services via an admin dialog
+when a service holds the DFU interface. Nano 4G (31) / Nano 5G (34) device AES
+uses the `blx r0` trampoline, which upstream wInd3x restricts to bare-metal
+Linux (host transfer-abort semantics); on macOS these models export
+raw/plaintext members instead (e.g. Nano 5G RSRC + SilverImagesDB). Classic 7G
+Rev C (family 38, DFU PID `0x1250`) may not be recognized by stock wInd3x
+builds (upstream tracks `0x1223` for the S5L8702 family).
 
 ## Model matrix
 
@@ -51,14 +68,21 @@ ipod_universal_decrypt_b.py::_decrypt_category2_native
 
 Workflow:
 
-1. Stop Apple USB services.
-2. Attempt to release USB/IP ownership.
-3. Extract MSE members.
-4. Run `wInd3x-win.exe haxdfu -v`.
-5. Run `wInd3x-win.exe decrypt <input> <output> -v -r <recovery>`.
-6. Restart Apple USB services.
+1. Platform preparation (Windows: stop Apple services + unbind usbipd;
+   macOS: no-op, with optional launchctl service release from the GUI).
+2. Extract MSE members (read-only parser; members are materialized to a
+   temp directory).
+3. Run `wInd3x haxdfu -v` (wInd3x-win.exe on Windows, native darwin build on
+   macOS).
+4. Run `wInd3x decrypt <input> <output> -v -r <recovery>` for each encrypted
+   member; plaintext/raw members are exported byte-for-byte without the device.
+5. Restore platform device access (and re-bootstrap released Apple services
+   on macOS).
 
-Nano 4G and Nano 5G use trampoline RCE paths. Direct native Windows USB is required; USB/IP bridges are unreliable for the intentional timeout/re-enumeration sequence.
+Nano 4G and Nano 5G use trampoline RCE paths. Direct native USB is required;
+USB/IP bridges are unreliable for the intentional timeout/re-enumeration
+sequence, and upstream wInd3x restricts those trampolines to bare-metal
+Linux (the host must abort a DFU transfer after exactly 0x40 bytes).
 
 The SoC-specific parameters are supplied by upstream wInd3x in:
 

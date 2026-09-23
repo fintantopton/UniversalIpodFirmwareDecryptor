@@ -37,5 +37,5 @@ if errorlevel 1 (
 
 echo.
 echo Build complete:
-echo dist\iPodUniversalDecrypt_v3.2.0_b30.exe
+echo dist\iPodUniversalDecrypt_v3.3.0_b40.exe
 endlocal

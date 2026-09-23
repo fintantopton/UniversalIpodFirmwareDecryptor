@@ -28,6 +28,14 @@ vendor/*.dll
 vendor/wInd3x
 vendor/wInd3x-write-musl
 
+# macOS build artifacts and dependencies
+macos/*.icns
+.venv-macos/
+vendor/wInd3x-darwin*
+vendor/libusb-1.0.dylib
+*.pkg
+*.dmg
+
 # Local-only handover material
 NANO5G_IMPLEMENTATION_HANDOVER.md
 NANO5G_STRINGS_FONTS_FINDINGS.md
