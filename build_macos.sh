@@ -15,7 +15,8 @@
 #   * Python 3.9+ WITH Tk (python.org "python3" works out of the box;
 #     Homebrew Python needs: brew install python-tk)
 #   * Optional: Go >= 1.23 (to compile wInd3x for macOS when no binary is vendored)
-#   * Optional: brew install libusb   (Nano 2G iBugger path + wInd3x support)
+#   * brew install libusb + pkg-config  (required to build wInd3x; also used
+#     by the Nano 2G iBugger path) — the script runs `brew install` itself
 #
 # Output:
 #   dist/iPodFirmwareDecryptor.app        GUI app (ad-hoc signed)
@@ -139,16 +140,44 @@ if [[ $have_wind3x -eq 0 ]]; then
     GO_BIN="$(command -v go)"
   fi
 
-  if [[ -n "$GO_BIN" ]]; then
+  if [[ -n "$GO_BIN" ]] && command -v brew >/dev/null 2>&1; then
+    # gousb (wInd3x's USB layer) is a cgo binding: it needs CGO_ENABLED=1,
+    # pkg-config, and Homebrew libusb headers to compile.
+    if [[ ! -f /opt/homebrew/opt/libusb/lib/libusb-1.0.dylib && \
+          ! -f /usr/local/opt/libusb/lib/libusb-1.0.dylib ]]; then
+      echo "==> Installing libusb (required by wInd3x/gousb)"
+      brew install libusb
+    fi
+    if ! command -v pkg-config >/dev/null 2>&1; then
+      echo "==> Installing pkg-config (required by wInd3x/gousb)"
+      brew install pkg-config
+    fi
+
     echo "==> Building wInd3x for macOS with Go ($(go_version_of "$GO_BIN"), $GO_BIN)"
     mkdir -p build
     if [[ ! -d "build/wInd3x-src" ]]; then
       git clone --depth 1 https://github.com/freemyipod/wInd3x.git build/wInd3x-src
     fi
+    PKGCFG=""
+    for prefix in /opt/homebrew /usr/local; do
+      if [[ -f "$prefix/lib/pkgconfig/libusb-1.0.pc" ]]; then
+        PKGCFG="$prefix/lib/pkgconfig"
+        break
+      fi
+    done
     ( cd build/wInd3x-src \
-      && GOOS=darwin GOARCH="$ARCH" CGO_ENABLED=0 \
+      && GOOS=darwin GOARCH="$ARCH" CGO_ENABLED=1 \
+         PKG_CONFIG_PATH="$PKGCFG" \
          "$GO_BIN" build -o "../../vendor/$WIND3X_NAME" ./cmd/wInd3x )
     have_wind3x=1
+  elif [[ -n "$GO_BIN" ]]; then
+    echo "ERROR: Go was found, but building wInd3x also needs Homebrew (libusb)." >&2
+    echo "  Install Homebrew (https://brew.sh) and re-run," >&2
+    echo "  or place a prebuilt binary at vendor/$WIND3X_NAME" >&2
+    echo "  (source: https://github.com/freemyipod/wInd3x)." >&2
+    if [[ $REQUIRE_WIND3X -eq 1 ]]; then exit 1; fi
+    echo "WARNING: continuing without wInd3x — device-AES decrypt" >&2
+    echo "         (Category 2) will be unavailable." >&2
   else
     # Report the best Go we could find so the error message is actionable.
     found_ver=""
@@ -194,15 +223,24 @@ else
     cp "$LIBUSB" vendor/libusb-1.0.dylib
     echo "==> Copied libusb from $LIBUSB -> vendor/libusb-1.0.dylib"
   else
-    echo "NOTE: libusb not found (brew install libusb)." >&2
-    echo "      Only the Nano 2G iBugger path needs it; the app will tell you" >&2
-    echo "      if it is required." >&2
+    echo "WARNING: libusb dylib not found — bundled wInd3x (if any) and the" >&2
+    echo "         Nano 2G iBugger path will not work. Run: brew install libusb" >&2
   fi
 fi
 
-# Point wInd3x at the bundled libusb (Go/cgo builds link
-# @rpath/libusb-1.0.dylib; add an rpath to the binary's own directory).
+# Point wInd3x at the bundled libusb: fresh cgo builds carry an absolute
+# Homebrew reference (/opt/homebrew/opt/libusb/...) — repoint it at the copy
+# we vendor next to the binary, then make that directory resolvable.
 if [[ -f "vendor/$WIND3X_NAME" && -f "vendor/libusb-1.0.dylib" ]]; then
+  for prefix in /opt/homebrew /usr/local; do
+    if otool -L "vendor/$WIND3X_NAME" | grep -q "$prefix/opt/libusb"; then
+      install_name_tool -change \
+        "$prefix/opt/libusb/lib/libusb-1.0.dylib" \
+        "@rpath/libusb-1.0.dylib" "vendor/$WIND3X_NAME"
+      echo "==> Relinked $WIND3X_NAME against bundled libusb"
+      break
+    fi
+  done
   install_name_tool -add_rpath "@executable_path" "vendor/$WIND3X_NAME" 2>/dev/null || true
 fi
 
