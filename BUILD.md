@@ -28,11 +28,12 @@ The script:
 2. creates `.venv-macos` and installs `pyinstaller` + `pycryptodome`,
 3. converts `ICON.png` → `macos/AppIcon.icns` (sips/iconutil),
 4. prepares `vendor/`:
-   - `wInd3x-darwin-arm64` (or `-x86_64`) — built with `GOOS=darwin GOARCH=... go build ./cmd/wInd3x` from [freemyipod/wInd3x](https://github.com/freemyipod/wInd3x) when Go is available, or expected pre-placed;
+   - `wInd3x-darwin-arm64` (or `-x86_64`) — built from [freemyipod/wInd3x](https://github.com/freemyipod/wInd3x) with Go **>= 1.23** (`CGO_ENABLED=1`; its USB layer `gousb` is a libusb cgo binding, so `libusb` + `pkg-config` must be installed — the script runs `brew install` for both if missing), or expected pre-placed; the Homebrew libusb reference is then repointed at the bundled dylib with `install_name_tool`;
    - `libusb-1.0.dylib` — copied from Homebrew when present,
-5. runs PyInstaller with `iPodUniversalDecrypt_b-macos.spec` (onedir `.app`, windowed, bundle id `org.freemyipod.UniversalIpodFirmwareDecryptor`),
-6. ad-hoc code-signs the app (`codesign --force --deep -s -`),
-7. optionally builds the installer:
+5. runs the full test suite (`python -m unittest discover -s tests`) — **the build aborts if it is not green**,
+6. runs PyInstaller with `iPodUniversalDecrypt_b-macos.spec` (onedir `.app`, windowed, bundle id `org.freemyipod.UniversalIpodFirmwareDecryptor`),
+7. ad-hoc code-signs the vendored Mach-O files inside the bundle (wInd3x, libusb — `codesign --deep` does not necessarily sign code that PyInstaller 6 places in `Contents/Resources`, and Apple Silicon will not load unsigned Mach-O), then the app bundle itself (`codesign --force --deep -s -`),
+8. optionally builds the installer:
    - `.pkg` via `pkgbuild`/`productbuild` — installs `/Applications/iPodFirmwareDecryptor.app` and an `ipod-decrypt` CLI shim in `/usr/local/bin` (which execs the bundled binary with `--cli`),
    - `.dmg` via `hdiutil`.
 
@@ -153,7 +154,14 @@ Covered: IPSW filename parsing (including the format-2/format-1 ambiguity),
 MSE member parsing, Category 1 extraction (MSE + header-strip fallback),
 Category 3 Nano 2G software-AES round-trip with the public key, Category 2
 raw-member export without a device, Nano 5G FAT16 SilverImagesDB extraction,
-platform module behavior, and iBugger transport import/status.
+platform module behavior (including the macOS ioreg/system_profiler USB
+parsers), iBugger transport import/status, and — in
+`tests/test_spec_structure.py` — structural regression guards for both
+PyInstaller specs and the build scripts (spec stage order and the
+PyInstaller 6 `BUNDLE(COLLECT)` requirement, no `__file__` in specs,
+resolvable hidden imports, bundle name/version consistency with the build
+script, `CGO_ENABLED=1` for the wInd3x build, the Go version gate, the
+bundled-libusb relink, and explicit ad-hoc signing of nested binaries).
 
 Headless CLI (any platform, also installed as `ipod-decrypt` by the macOS .pkg):
 

@@ -237,6 +237,66 @@ def _parse_hex(value):
         return None
 
 
+def _parse_ioreg_usb_devices(out):
+    """Parse `ioreg -c IOUSBDevice -w 0 -l` output into [(vid, pid, name)].
+
+    ioreg emits each device's dictionary keys in an unspecified order, so
+    properties are accumulated per device block (a block starts at the
+    node header line, which is the only line containing '<dictionary>')
+    instead of relying on line order.
+    """
+    devices = []
+    seen = set()
+    vid = pid = None
+    name = ""
+
+    def flush():
+        nonlocal vid, pid, name
+        if vid is not None and pid is not None and (vid, pid) not in seen:
+            seen.add((vid, pid))
+            devices.append((vid, pid, name))
+        vid = pid = None
+        name = ""
+
+    for line in out.splitlines():
+        if "<dictionary>" in line:
+            flush()  # new node block begins
+            continue
+        m = re.search(r'idVendor"\s*=\s*(\d+)', line)
+        if m:
+            vid = int(m.group(1)) & 0xFFFF
+            continue
+        m = re.search(r'idProduct"\s*=\s*(\d+)', line)
+        if m:
+            pid = int(m.group(1)) & 0xFFFF
+            continue
+        m = re.search(r'USB Product Name"\s*=\s*"([^"]+)"', line)
+        if m:
+            name = m.group(1)
+    flush()
+    return devices
+
+
+def _parse_spusb(out):
+    """Parse `system_profiler SPUSBDataType` output into [(vid, pid, name)].
+
+    "Vendor ID: 0x...." and "ID: 0x...." appear on separate lines, so each
+    product ID is paired with the most recently seen vendor ID.
+    """
+    devices = []
+    vendor = None
+    for line in out.splitlines():
+        m = re.search(r"Vendor ID: (0x[0-9A-Fa-f]+)", line)
+        if m:
+            vendor = _parse_hex(m.group(1))
+            continue
+        m = re.search(r"^\s*ID: (0x[0-9A-Fa-f]+)", line)
+        if m and vendor is not None:
+            devices.append((vendor, _parse_hex(m.group(1)), ""))
+            vendor = None
+    return devices
+
+
 def enumerate_usb_devices():
     """List (vid, pid, product) tuples for connected USB devices.
 
@@ -268,40 +328,17 @@ def enumerate_usb_devices():
 
     if IS_MACOS:
         # ioreg is fast and exposes idVendor/idProduct (decimal) per device.
-        ok, out, _ = run_cmd(["ioreg", "-p", "IOUSB", "-l", "-w", "0"], timeout=20)
+        ok, out, _ = run_cmd(["ioreg", "-c", "IOUSBDevice", "-w", "0", "-l"],
+                             timeout=20)
         if ok:
-            product = ""
-            vid = None
-            seen = set()
-            for line in out.splitlines():
-                mp = re.search(r'USB Product Name"\s*=\s*"([^"]+)"', line)
-                if mp:
-                    product = mp.group(1)
-                    continue
-                mv = re.search(r'idVendor"\s*=\s*(\d+)', line)
-                if mv:
-                    vid = int(mv.group(1)) & 0xFFFF
-                    continue
-                mr = re.search(r'idProduct"\s*=\s*(\d+)', line)
-                if mr and vid is not None:
-                    pid = int(mr.group(1)) & 0xFFFF
-                    if (vid, pid) not in seen:
-                        seen.add((vid, pid))
-                        devices.append((vid, pid, product))
-                    product = ""
-                    vid = None
+            devices = _parse_ioreg_usb_devices(out)
         if devices:
             return devices
         # Fallback: system_profiler (slower).
         ok, out, _ = run_cmd(["system_profiler", "SPUSBDataType"], timeout=30)
         if not ok:
             return devices
-        for match in re.finditer(
-            r"Vendor ID: (0x[0-9A-Fa-f]+).*?ID: (0x[0-9A-Fa-f]+)", out
-        ):
-            devices.append((_parse_hex(match.group(1)),
-                            _parse_hex(match.group(2)), ""))
-        return devices
+        return _parse_spusb(out)
 
     # Linux (development/testing)
     usb_root = "/sys/bus/usb/devices"

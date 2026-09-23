@@ -46,7 +46,6 @@ _datas = [
         _vendor("wInd3x-darwin"),
         _vendor("wInd3x"),
         _vendor("libusb-1.0.dylib"),
-        _vendor("ICON.png"),
     ) if item
 ]
 

@@ -245,6 +245,15 @@ if [[ -f "vendor/$WIND3X_NAME" && -f "vendor/libusb-1.0.dylib" ]]; then
 fi
 
 # ----------------------------------------------------------------------------
+# 4b. Test suite (must be green before packaging anything)
+# ----------------------------------------------------------------------------
+echo "==> Running test suite"
+"$VENV_PY" -m unittest discover -s tests -q || {
+  echo "ERROR: test suite failed — not packaging." >&2
+  exit 1
+}
+
+# ----------------------------------------------------------------------------
 # 5. PyInstaller (onedir .app)
 # ----------------------------------------------------------------------------
 echo "==> Running PyInstaller"
@@ -260,7 +269,20 @@ fi
 # ----------------------------------------------------------------------------
 # 6. Ad-hoc code signature (local builds; no Developer ID required)
 # ----------------------------------------------------------------------------
-echo "==> Code-signing (ad-hoc)"
+echo "==> Code-signing nested vendor binaries (ad-hoc)"
+# PyInstaller 6 places our vendored Mach-O files (wInd3x, libusb) in
+# Contents/Resources, where `codesign --deep` does not necessarily sign
+# them; on Apple Silicon an unsigned Mach-O binary cannot be loaded at
+# all, so sign each one explicitly before signing the bundle.
+for f in "$APP/Contents/Resources"/wInd3x-darwin-* \
+         "$APP/Contents/Resources"/wInd3x \
+         "$APP/Contents/Resources"/libusb-1.0.dylib; do
+  if [[ -f "$f" ]]; then
+    codesign --force --sign - "$f"
+  fi
+done
+
+echo "==> Code-signing app bundle (ad-hoc)"
 codesign --force --deep --sign - "$APP"
 
 echo
